@@ -1,0 +1,13 @@
+apiVersion: v1
+appVersion: 0.1.10
+# description: The server receives data from the Elastic APM agents and stores the data
+#   into a datastore like Elasticsearch
+# home: https://www.elastic.co/solutions/apm
+# icon: https://www.elastic.co/assets/blt47799dcdcf08438d/logo-elastic-beats-lt.svg
+maintainers:
+- email: dogzzdogzz@gmail.com
+  name: dogzzdogzz
+name: k8s-pod-rescheduler
+# sources:
+# - https://www.elastic.co/guide/en/apm/get-started/current/index.html
+version: 0.1.0

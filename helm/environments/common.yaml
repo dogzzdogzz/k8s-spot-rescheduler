@@ -1,0 +1,60 @@
+resources:
+  limits:
+    cpu: 200m
+    memory: 200Mi
+  requests:
+    cpu: 50m
+    memory: 120Mi
+commonLabels:
+  team: sre
+extraEnv:
+- name: DRY_RUN
+  value: "false"
+- name: HOUSEKEEPING_INTERVAL
+  value: "60"
+- name: COOLDOWN_INTERVAL
+  value: "600"
+- name: SPOT_WORKER_NODE_LABEL
+  value: "k8s-node-role/spot-worker=true"
+- name: ON_DEMAND_WORKER_NODE_LABEL
+  value: "k8s-node-role/on-demand-worker=true"
+- name: ON_DEMAND_LIFECYCLE_NODE_LABEL
+  value: "k8s-node-role/on-demand-worker=true"
+- name: GRACEFUL_PERIOD_SECONDS
+  value: "120"
+- name: DELETE_NON_REPLICATED_PODS  # not supported yet
+  value: "true"
+- name: SAFE_TO_EVICT_ANNOATATION
+  value: "k8s-spot-rescheduler/safe-to-evict"
+- name: EVICT_ALL_PODS_AT_ONCE
+  value: "false"
+priorityClassName: infra-cluster-critical
+dnsConfig:
+  options:
+  - name: single-request-reopen
+  - name: ndots
+    value: "2"
+replicaCount: 1
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: node-role.kubernetes.io/worker
+          operator: In
+          values:
+          - "true"
+      - matchExpressions:
+        - key: k8s-node-role/on-demand-worker
+          operator: In
+          values:
+          - "true"
+tolerations:
+- key: node-role.kubernetes.io/worker
+  operator: Equal
+  value: "true"
+  effect: PreferNoSchedule
+- key: k8s-node-role/on-demand-worker
+  operator: Equal
+  value: "true"
+  effect: PreferNoSchedule
