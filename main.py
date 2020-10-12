@@ -15,22 +15,22 @@ def evict_pod(data, gracePeriodSeconds, dry_run, evictAllPodsAtOnce):
                 print("[%s][%s][%s][%s] Evicting" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), node["spec"].metadata.name, pod["spec"].metadata.namespace, pod["spec"].metadata.name))
                 if not dry_run:
                     # core_v1.delete_namespaced_pod(
-                    #     name=pod["spec"].metadata.name, 
+                    #     name=pod["spec"].metadata.name,
                     #     namespace=pod["spec"].metadata.namespace,
                     #     grace_period_seconds=gracePeriodSeconds
                     # )
                     body = k8s.client.V1beta1Eviction(
                         metadata=k8s.client.V1ObjectMeta(
-                            name=pod["spec"].metadata.name, 
+                            name=pod["spec"].metadata.name,
                             namespace=pod["spec"].metadata.namespace
-                        ), 
+                        ),
                         delete_options=k8s.client.V1DeleteOptions(
                             grace_period_seconds=gracePeriodSeconds
                         )
                     )
                     try:
                         core_v1.create_namespaced_pod_eviction(
-                            name=pod["spec"].metadata.name, 
+                            name=pod["spec"].metadata.name,
                             namespace=pod["spec"].metadata.namespace,
                             body=body
                         )
@@ -41,7 +41,7 @@ def evict_pod(data, gracePeriodSeconds, dry_run, evictAllPodsAtOnce):
                             print("[%s][%s][%s][%s] %s" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), node["spec"].metadata.name, pod["spec"].metadata.namespace, pod["spec"].metadata.name, errBody["details"]["causes"][0]["message"]))
                         else:
                             print("[%s][%s][%s][%s] Exception when calling CoreV1Api->create_namespaced_pod_template: %s\n" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), node["spec"].metadata.name, pod["spec"].metadata.namespace, pod["spec"].metadata.name, e))
-                            exit(1)
+                            # exit(1)
         if isPodEvicted and not evictAllPodsAtOnce:
             return isPodEvicted
     if not isPodEvicted:
@@ -109,14 +109,15 @@ def evaluate_evict_Pod_Candidates(data, onDemandWorkerNodeLabel, onDemandLifecyc
             ### [To Do]- Pods with local storage. *
             ### - Pods that cannot be moved elsewhere due to various constraints (lack of resources, non-matching node selectors or affinity, matching anti-affinity, etc)
             ### - Pods that have annotation: "k8s-spot-rescheduler/safe-to-evict": "false"
-            if not getattr(pod["spec"].metadata, "owner_references", None) and not deleteNonReplicatedPods:
-                continue
-            if pod["spec"].metadata.owner_references[0].kind == "DaemonSet":
+            if getattr(pod["spec"].metadata, "owner_references", None) is None:
+                if deleteNonReplicatedPods:
+                    continue
+            elif pod["spec"].metadata.owner_references[0].kind == "DaemonSet":
                 continue
             if is_node_affinity_required_on_demand(
-                nodeName=node["spec"].metadata.name, 
-                pod=pod, 
-                onDemandWorkerNodeLabel=onDemandWorkerNodeLabel, 
+                nodeName=node["spec"].metadata.name,
+                pod=pod,
+                onDemandWorkerNodeLabel=onDemandWorkerNodeLabel,
                 onDemandLifecycleNodeLabel=onDemandLifecycleNodeLabel
             ):
                 continue
@@ -154,7 +155,10 @@ def compute_allocated_resources(spotWorkerNodeLabel, onDemandWorkerNodeLabel):
 
             pods = core_v1.list_pod_for_all_namespaces(limit=max_pods,
                                                     field_selector=field_selector).items
-
+            clusterOverprovisionerStats = {
+                "cpu_req": 0,
+                "mem_req": 0
+            }
             # compute the allocated resources
             cpureqs,cpulmts,memreqs,memlmts = [], [], [], []
             podsStats = []
@@ -177,6 +181,11 @@ def compute_allocated_resources(spotWorkerNodeLabel, onDemandWorkerNodeLabel):
                     "spec": pod,
                     "name": pod.metadata.name
                 })
+                if pod.metadata.labels.get("app.kubernetes.io/instance") == "cluster-overprovisioner":
+                    clusterOverprovisionerStats = {
+                        "cpu_req": clusterOverprovisionerStats["cpu_req"] + sum(podCpuReqs),
+                        "mem_req": clusterOverprovisionerStats["mem_req"] + sum(podMemReqs)
+                    }
             podsStats.sort(key=lambda x: x["cpu_req"], reverse=True)
 
             stats["cpu_req"]     = sum(cpureqs)
@@ -189,20 +198,20 @@ def compute_allocated_resources(spotWorkerNodeLabel, onDemandWorkerNodeLabel):
             stats["mem_req_per"] = (stats["mem_req"] / stats["mem_alloc"] * 100).to('dimensionless')
             stats["mem_lmt_per"] = (stats["mem_lmt"] / stats["mem_alloc"] * 100).to('dimensionless')
 
-            stats["cpu_free"] = stats["cpu_alloc"] - stats["cpu_req"]
-            stats["mem_free"] = stats["mem_alloc"] - stats["mem_req"]
+            stats["cpu_free"] = stats["cpu_alloc"] - stats["cpu_req"] + clusterOverprovisionerStats["cpu_req"]
+            stats["mem_free"] = stats["mem_alloc"] - stats["mem_req"] + clusterOverprovisionerStats["mem_req"]
             dataEntry = {
                 "name": node_name,
                 "spec": node,
-                "node-stats": stats, 
+                "node-stats": stats,
                 "pods": podsStats
             }
             data[instanceType].append(dataEntry)
-        
-        ### The effect of this algorithm should be, that we take the emptiest on demand nodes first 
-        ### and empty those before we empty a node which is busier, thus resulting in the highest number 
+
+        ### The effect of this algorithm should be, that we take the emptiest on demand nodes first
+        ### and empty those before we empty a node which is busier, thus resulting in the highest number
         ### of 'empty' nodes that can be removed from the cluster.
-        
+
         ### Sort on-demand instances by least requested CPU
         if instanceType == "on-demand":
             data[instanceType].sort(key=lambda x: x["node-stats"]["cpu_req"])
@@ -242,13 +251,14 @@ if __name__ == '__main__':
     core_v1 = k8s.client.CoreV1Api()
 
     while True:
+        print("[%s] Scanning pods." % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ")))
         data = compute_allocated_resources(
-            spotWorkerNodeLabel=spotWorkerNodeLabel, 
+            spotWorkerNodeLabel=spotWorkerNodeLabel,
             onDemandWorkerNodeLabel=onDemandWorkerNodeLabel
         )
         data = evaluate_evict_Pod_Candidates(
             data,
-            onDemandWorkerNodeLabel=onDemandWorkerNodeLabel, 
+            onDemandWorkerNodeLabel=onDemandWorkerNodeLabel,
             onDemandLifecycleNodeLabel=onDemandLifecycleNodeLabel,
             SafeToEvictAnnotation=safeToEvictAnnotation,
             deleteNonReplicatedPods=deleteNonReplicatedPods
@@ -265,4 +275,3 @@ if __name__ == '__main__':
             time.sleep(cooldownInterval)
         else:
             print("[%s] Next housekeeping in %ss" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), housekeepingInterval))
-            time.sleep(housekeepingInterval)
