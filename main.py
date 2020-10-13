@@ -49,6 +49,7 @@ def evict_pod(data, gracePeriodSeconds, dry_run, evictAllPodsAtOnce):
     return isPodEvicted
 
 def evaluate_spot_node_free_space(data):
+    isOnDemandNodeCalculated = False
     for node in data["on-demand"]:
         for pod in node["pods"]:
             if pod.get("spot-schedulable"):
@@ -58,10 +59,13 @@ def evaluate_spot_node_free_space(data):
                         spotNode["node-stats"]["cpu_free"] = (spotNode["node-stats"]["cpu_free"] - pod["cpu_req"]).to('dimensionless')
                         spotNode["node-stats"]["mem_free"] = (spotNode["node-stats"]["mem_free"] - pod["mem_req"]).to('dimensionless')
                         pod["has-free-capacity"] = True
-                        # print("[%s][%s][%s][%s] can be scheduled to %s" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), node["spec"].metadata.name, pod["spec"].metadata.namespace, pod["spec"].metadata.name, spotNode["spec"].metadata.name))
+                        isOnDemandNodeCalculated = True
+                        print("[%s][%s][%s][%s] can be scheduled to %s" % (datetime.datetime.now().strftime("%Y/%m/%dT%H:%M:%S.%fZ"), node["spec"].metadata.name, pod["spec"].metadata.namespace, pod["spec"].metadata.name, spotNode["spec"].metadata.name))
                         break
                     elif idx == len(data["spot"]) - 1:
-                        print("[%s][%s][%s] Unreschedulable due to insufficient free CPU/memory capacity in all spot nodes." % (spotNode["name"], pod["spec"].metadata.namespace, pod["spec"].metadata.name))
+                        print("[%s][%s][%s] Unreschedulable due to insufficient free CPU (%s)/memory capacity (%s) in all spot nodes." % (spotNode["name"], pod["spec"].metadata.namespace, pod["spec"].metadata.name, pod["cpu_req"], pod["mem_req"]))
+        if isOnDemandNodeCalculated == True:
+            return data
     return data
 
 def is_node_affinity_required_on_demand(nodeName, pod, onDemandWorkerNodeLabel, onDemandLifecycleNodeLabel):
@@ -181,7 +185,7 @@ def compute_allocated_resources(spotWorkerNodeLabel, onDemandWorkerNodeLabel):
                     "spec": pod,
                     "name": pod.metadata.name
                 })
-                if pod.metadata.labels.get("app.kubernetes.io/instance") == "cluster-overprovisioner":
+                if pod.metadata.labels and pod.metadata.labels.get("app.kubernetes.io/instance") == "cluster-overprovisioner":
                     clusterOverprovisionerStats = {
                         "cpu_req": clusterOverprovisionerStats["cpu_req"] + sum(podCpuReqs),
                         "mem_req": clusterOverprovisionerStats["mem_req"] + sum(podMemReqs)
@@ -197,7 +201,6 @@ def compute_allocated_resources(spotWorkerNodeLabel, onDemandWorkerNodeLabel):
             stats["mem_lmt"]     = sum(memlmts)
             stats["mem_req_per"] = (stats["mem_req"] / stats["mem_alloc"] * 100).to('dimensionless')
             stats["mem_lmt_per"] = (stats["mem_lmt"] / stats["mem_alloc"] * 100).to('dimensionless')
-
             stats["cpu_free"] = stats["cpu_alloc"] - stats["cpu_req"] + clusterOverprovisionerStats["cpu_req"]
             stats["mem_free"] = stats["mem_alloc"] - stats["mem_req"] + clusterOverprovisionerStats["mem_req"]
             dataEntry = {
